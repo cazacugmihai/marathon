@@ -210,7 +210,7 @@ lazy val commonSettings = inConfig(SerialIntegrationTest)(Defaults.testTasks) ++
   coverageFailOnMinimum := true,
 
   fork in run := true,
-  AspectjKeys.aspectjVersion := "1.8.10",
+  AspectjKeys.aspectjVersion in Aspectj := "1.8.10",
   AspectjKeys.inputs in Aspectj += compiledClasses.value,
   products in Compile := (products in Aspectj).value,
   products in Runtime := (products in Aspectj).value,
@@ -223,11 +223,34 @@ lazy val commonSettings = inConfig(SerialIntegrationTest)(Defaults.testTasks) ++
   javaOptions in Test ++= (AspectjKeys.weaverOptions in Aspectj).value
 )
 
+val aopMerge: sbtassembly.MergeStrategy = new sbtassembly.MergeStrategy {
+  val name = "aopMerge"
+  import scala.xml._
+  import scala.xml.dtd._
+
+  def apply(tempDir: File, path: String, files: Seq[File]): Either[String, Seq[(File, String)]] = {
+    val dt = DocType("aspectj", PublicID("-//AspectJ//DTD//EN", "http://www.eclipse.org/aspectj/dtd/aspectj.dtd"), Nil)
+    val file = MergeStrategy.createMergeTarget(tempDir, path)
+    val xmls: Seq[Elem] = files.map(XML.loadFile)
+    val aspectsChildren: Seq[Node] = xmls.flatMap(_ \\ "aspectj" \ "aspects" \ "_")
+    val weaverChildren: Seq[Node] = xmls.flatMap(_ \\ "aspectj" \ "weaver" \ "_")
+    val options: String = xmls.map(x => (x \\ "aspectj" \ "weaver" \ "@options").text).mkString(" ").trim
+    val weaverAttr = if (options.isEmpty) Null else new UnprefixedAttribute("options", options, Null)
+    val aspects = new Elem(null, "aspects", Null, TopScope, false, aspectsChildren: _*)
+    val weaver = new Elem(null, "weaver", weaverAttr, TopScope, false, weaverChildren: _*)
+    val aspectj = new Elem(null, "aspectj", Null, TopScope, false, aspects, weaver)
+    XML.save(file.toString, aspectj, "UTF-8", xmlDecl = false, dt)
+    IO.append(file, IO.Newline.getBytes(IO.defaultCharset))
+    Right(Seq(file -> path))
+  }
+}
+
 // TODO: Move away from sbt-assembly, favoring sbt-native-packager
 lazy val asmSettings = Seq(
   assemblyMergeStrategy in assembly := {
     case "application.conf" => MergeStrategy.concat
     case "META-INF/jersey-module-version" => MergeStrategy.first
+    case "META-INF/aop.xml" => aopMerge
     case "org/apache/hadoop/yarn/util/package-info.class" => MergeStrategy.first
     case "org/apache/hadoop/yarn/factories/package-info.class" => MergeStrategy.first
     case "org/apache/hadoop/yarn/factory/providers/package-info.class" => MergeStrategy.first

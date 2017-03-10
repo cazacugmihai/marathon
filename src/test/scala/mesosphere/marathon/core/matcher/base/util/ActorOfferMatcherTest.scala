@@ -1,6 +1,7 @@
 package mesosphere.marathon
 package core.matcher.base.util
 
+import mesosphere.Unstable
 import akka.actor.ActorRef
 import akka.testkit.TestActor.AutoPilot
 import akka.testkit.{ TestActor, TestProbe }
@@ -69,7 +70,7 @@ class ActorOfferMatcherTest extends AkkaUnitTest {
     }
 
     "the actor takes too long to process" should {
-      "receive a no match after deadline" in {
+      "receive a no match after deadline" taggedAs Unstable in {
         val now = Timestamp.zero
         val deadline = now + 60.millis
 
@@ -78,9 +79,9 @@ class ActorOfferMatcherTest extends AkkaUnitTest {
           override def run(sender: ActorRef, msg: Any): AutoPilot = {
             msg match {
               case ActorOfferMatcher.MatchOffer(deadline, offer, p) =>
-                // We have to run in another thread to abvoid blocking the test code.
+                // We have to run in another thread to avoid blocking the test code.
                 Future {
-                  Thread.sleep(100.millis.toMillis)
+                  Thread.sleep(2.seconds.toMillis)
                   p.trySuccess(MatchedInstanceOps(OfferID("other-2"), Seq.empty, true))
                 }
                 TestActor.NoAutoPilot

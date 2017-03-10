@@ -7,7 +7,7 @@ import akka.actor.ActorSystem
 import akka.event.EventStream
 import com.google.inject.{ Inject, Provider }
 import mesosphere.marathon.core.auth.AuthModule
-import mesosphere.marathon.core.base.{ ActorsModule, Clock, ShutdownHooks }
+import mesosphere.marathon.core.base.{ ActorsModule, Clock, LifecycleState }
 import mesosphere.marathon.core.deployment.DeploymentModule
 import mesosphere.marathon.core.election._
 import mesosphere.marathon.core.event.EventModule
@@ -17,6 +17,7 @@ import mesosphere.marathon.core.health.HealthModule
 import mesosphere.marathon.core.history.HistoryModule
 import mesosphere.marathon.core.instance.update.InstanceChangeHandler
 import mesosphere.marathon.core.launcher.LauncherModule
+import mesosphere.marathon.core.launcher.impl.UnreachableReservedOfferMonitor
 import mesosphere.marathon.core.launchqueue.LaunchQueueModule
 import mesosphere.marathon.core.leadership.LeadershipModule
 import mesosphere.marathon.core.matcher.base.util.StopOnFirstMatchingOfferMatcher
@@ -29,6 +30,7 @@ import mesosphere.marathon.core.task.bus.TaskBusModule
 import mesosphere.marathon.core.task.jobs.TaskJobsModule
 import mesosphere.marathon.core.task.termination.TaskTerminationModule
 import mesosphere.marathon.core.task.tracker.InstanceTrackerModule
+import mesosphere.marathon.core.task.update.TaskStatusUpdateProcessor
 import mesosphere.marathon.io.storage.StorageProvider
 import mesosphere.marathon.storage.StorageModule
 
@@ -51,14 +53,16 @@ class CoreModuleImpl @Inject() (
   clock: Clock,
   storage: StorageProvider,
   scheduler: Provider[DeploymentService],
-  instanceUpdateSteps: Seq[InstanceChangeHandler])
+  instanceUpdateSteps: Seq[InstanceChangeHandler],
+  taskStatusUpdateProcessor: TaskStatusUpdateProcessor
+)
     extends CoreModule {
 
   // INFRASTRUCTURE LAYER
 
   private[this] lazy val random = Random
-  private[this] lazy val shutdownHookModule = ShutdownHooks()
-  override lazy val actorsModule = new ActorsModule(shutdownHookModule, actorSystem)
+  private[this] lazy val lifecycleState = LifecycleState.WatchingJVM
+  override lazy val actorsModule = new ActorsModule(actorSystem)
 
   override lazy val leadershipModule = LeadershipModule(actorsModule.actorRefFactory)
   override lazy val electionModule = new ElectionModule(
@@ -66,7 +70,7 @@ class CoreModuleImpl @Inject() (
     actorSystem,
     eventStream,
     hostPort,
-    shutdownHookModule
+    lifecycleState
   )
 
   // TASKS
@@ -77,7 +81,8 @@ class CoreModuleImpl @Inject() (
       storageModule.instanceRepository, instanceUpdateSteps)(actorsModule.materializer)
   override lazy val taskJobsModule = new TaskJobsModule(marathonConf, leadershipModule, clock)
   override lazy val storageModule = StorageModule(
-    marathonConf)(
+    marathonConf,
+    lifecycleState)(
     actorsModule.materializer,
     ExecutionContext.global,
     actorSystem.scheduler,
@@ -121,8 +126,14 @@ class CoreModuleImpl @Inject() (
       offerMatcherReconcilerModule.offerMatcherReconciler,
       offerMatcherManagerModule.globalOfferMatcher
     ),
-    pluginModule.pluginManager
+    pluginModule.pluginManager,
+    offerStreamInput
   )(clock)
+
+  lazy val offerStreamInput = UnreachableReservedOfferMonitor.run(
+    lookupInstance = taskTrackerModule.instanceTracker.instance(_),
+    taskStatusPublisher = taskStatusUpdateProcessor.publish(_)
+  )(actorsModule.materializer)
 
   override lazy val appOfferMatcherModule = new LaunchQueueModule(
     marathonConf,
@@ -177,7 +188,7 @@ class CoreModuleImpl @Inject() (
 
   override lazy val healthModule: HealthModule = new HealthModule(
     actorSystem, taskTerminationModule.taskKillService, eventStream,
-    taskTrackerModule.instanceTracker, groupManagerModule.groupManager)
+    taskTrackerModule.instanceTracker, groupManagerModule.groupManager)(actorsModule.materializer)
 
   // GROUP MANAGER
 

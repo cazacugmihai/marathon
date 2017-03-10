@@ -25,6 +25,11 @@ def withCommitStatus(label, block) {
   }
 }
 
+def previousBuildFailed() {
+    def previousResult = currentBuild.rawBuild.getPreviousBuild()?.getResult()
+    return !hudson.model.Result.SUCCESS.equals(previousResult)
+}
+
 /**
  * Wrap block with a stage and a GitHub commit status setter.
  *
@@ -101,14 +106,14 @@ node('JenkinsMarathonCI-Debian8-1-2017-02-23') { try {
             "Create Debian and Red Hat Package": {
               sh "sudo rm -rf marathon-pkg && git clone https://github.com/mesosphere/marathon-pkg.git marathon-pkg"
               dir("marathon-pkg") {
-                // marathon-pkg has marathon as a git module. We've already
-                // checked it out. So let's just symlink.
-                sh "sudo rm -rf marathon && ln -s ../ marathon"
-                sh "sudo make all"
+                 // marathon-pkg has marathon as a git module. We've already
+                 // checked it out. So let's just symlink.
+                 sh "sudo rm -rf marathon && ln -s ../ marathon"
+                 sh "sudo make all"
               }
             },
             "Build Docker Image": {
-              //target is in .dockerignore so we just copy the jar before.
+              // target is in .dockerignore so we just copy the jar before.
               sh "cp target/*/marathon-assembly-*.jar ."
               mesosVersion = sh(returnStdout: true, script: "sed -n 's/^.*MesosDebian = \"\\(.*\\)\"/\\1/p' <./project/Dependencies.scala").trim()
               docker.build("mesosphere/marathon:${gitCommit}", "--build-arg MESOS_VERSION=${mesosVersion} .")
@@ -121,6 +126,23 @@ node('JenkinsMarathonCI-Debian8-1-2017-02-23') { try {
           archiveArtifacts artifacts: "target/marathon-${gitCommit}.tgz", allowEmptyArchive: false
           archiveArtifacts artifacts: "marathon-pkg/marathon*.deb", allowEmptyArchive: false
           archiveArtifacts artifacts: "marathon-pkg/marathon*.rpm", allowEmptyArchive: false
+          step([
+              $class: 'S3BucketPublisher',
+              entries: [[
+                  sourceFile: "target/marathon-${gitCommit}.tgz",
+                  bucket: 'marathon-artifacts',
+                  selectedRegion: 'us-west-2',
+                  noUploadOnFailure: true,
+                  managedArtifacts: true,
+                  flatten: true,
+                  showDirectlyInBrowser: false,
+                  keepForever: true,
+              ]],
+              profileName: 'marathon-artifacts',
+              dontWaitForConcurrentBuildCompletion: false,
+              consoleLogLevel: 'INFO',
+              pluginFailureResultConstraint: 'FAILURE'
+          ])
       }
       // Only create latest-dev snapshot for master.
       if( env.BRANCH_NAME == "master" ) {
@@ -135,12 +157,24 @@ node('JenkinsMarathonCI-Debian8-1-2017-02-23') { try {
         currentBuild.result = 'FAILURE'
         if( env.BRANCH_NAME.startsWith("releases/") || env.BRANCH_NAME == "master" ) {
           slackSend(
-            message: "(;¬_¬) @marathon-oncall branch `${env.BRANCH_NAME}` failed in build `${env.BUILD_NUMBER}`. (<${env.BUILD_URL}|Open>)",
+            message: "(;¬_¬) branch `${env.BRANCH_NAME}` failed in build `${env.BUILD_NUMBER}`. (<${env.BUILD_URL}|Open>)",
             color: "danger",
             channel: "#marathon-dev",
             tokenCredentialId: "f430eaac-958a-44cb-802a-6a943323a6a8")
         }
+        throw err
     } finally {
+        if( env.BRANCH_NAME.startsWith("releases/") || env.BRANCH_NAME == "master" ) {
+            // Last build failed but this succeeded.
+            if( previousBuildFailed() && currentBuild.result == 'SUCCESS') {
+              slackSend(
+                message: "╭( ･ㅂ･)و ̑̑ branch `${env.BRANCH_NAME}` is green again. (<${env.BUILD_URL}|Open>)",
+                color: "good",
+                channel: "#marathon-dev",
+                tokenCredentialId: "f430eaac-958a-44cb-802a-6a943323a6a8")
+            }
+        }
+
         step([ $class: 'GitHubCommitStatusSetter'
              , errorHandlers: [[$class: 'ShallowAnyErrorHandler']]
              , contextSource: [$class: 'ManuallyEnteredCommitContextSource', context: "Velocity All"]
