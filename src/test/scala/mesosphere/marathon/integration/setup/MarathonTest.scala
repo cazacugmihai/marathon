@@ -298,15 +298,6 @@ trait MarathonTest extends StrictLogging with ScalaFutures with Eventually {
     def toTestPath: PathId = testBasePath.append(path)
   }
 
-  val appProxyMainInvocationImpl: String = {
-    val javaExecutable = sys.props.get("java.home").fold("java")(_ + "/bin/java")
-    val classPath = sys.props.getOrElse("java.class.path", "target/classes").replaceAll(" ", "")
-    val main = classOf[AppMock].getName
-    val id = UUID.randomUUID.toString
-    appProxyIds(_ += id)
-    s"""$javaExecutable -Xmx64m -DappProxyId=$id -DtestSuite=$suiteName -classpath $classPath $main"""
-  }
-
   def appProxyHealthCheck(
     gracePeriod: FiniteDuration = 3.seconds,
     interval: FiniteDuration = 1.second,
@@ -316,20 +307,9 @@ trait MarathonTest extends StrictLogging with ScalaFutures with Eventually {
 
   def appProxy(appId: PathId, versionId: String, instances: Int, healthCheck: Option[HealthCheck] = Some(appProxyHealthCheck()), dependencies: Set[PathId] = Set.empty): AppDefinition = {
 
-    val appPythonMain: String = "/Users/kjeschkies/Projects/marathon/app_mock.py"
-    val appProxyMainInvocation: String = {
-      val file = File.createTempFile("appProxy", ".sh")
-      file.deleteOnExit()
-
-      FileUtils.write(
-        file,
-        s"""|set -x
-            |exec /Users/kjeschkies/.pyenv/shims/python3 $appPythonMain $$*""".stripMargin)
-      file.setExecutable(true)
-
-      file.getAbsolutePath
-    }
-    val cmd = Some(s"""echo APP PROXY $$MESOS_TASK_ID RUNNING; $appProxyMainInvocation """ +
+    val projectDir = sys.props.getOrElse("user.dir", ".")
+    val appMock: File = new File(projectDir, "src/test/python/app_mock.py")
+    val cmd = Some(s"""echo APP PROXY $$MESOS_TASK_ID RUNNING; ${appMock.getAbsolutePath} """ +
       s"""$$PORT0 $appId $versionId http://127.0.0.1:${callbackEndpoint.localAddress.getPort}/health$appId/$versionId""")
 
     AppDefinition(
