@@ -100,8 +100,7 @@ if __name__ == "__main__":
     port = int(sys.argv[1])
     appId = sys.argv[2]
     version = sys.argv[3]
-    # url = "{}/{}".format(sys.argv[4], port)
-    url = sys.argv[4]
+    url = "{}/{}".format(sys.argv[4], port)
     taskId = os.getenv("MESOS_TASK_ID", "<UNKNOWN>")
 
     HTTPServer.allow_reuse_address = True
