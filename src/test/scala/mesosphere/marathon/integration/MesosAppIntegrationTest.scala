@@ -71,7 +71,7 @@ class MesosAppIntegrationTest extends AkkaIntegrationTest with EmbeddedMarathonT
       Given("a new Docker app the uses 'Cmd' in its Dockerfile")
       val app = raml.App(
         id = (testBasePath / s"mesos-docker-app-${currentAppId.incrementAndGet()}").toString,
-        container = Some(raml.Container(`type` = raml.EngineType.Docker, docker = Some(raml.DockerContainer(
+        container = Some(raml.Container(`type` = raml.EngineType.Mesos, docker = Some(raml.DockerContainer(
           image = "hello-world")))),
         cpus = 0.1, mem = 32.0,
         instances = 1
